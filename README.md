@@ -7,6 +7,8 @@ Python-based Model Context Protocol (MCP) server that proxies MediaMonkey 2024 /
 - [Controlling MM5 from External Applications](https://mediamonkey.com/wiki/Controlling_MM5_from_External_Applications)
 - [SDBApplication automation reference](https://mediamonkey.com/wiki/SDBApplication)
 - [SDBPlayer / SDBSongData object model](https://mediamonkey.com/wiki/SDBPlayer)
+- [ISDBUI::Menu Compendium (menu scopes)](https://www.mediamonkey.com/wiki/ISDBUI::Menu_Compendium)
+- [SDBIniFile reference (config settings)](https://www.mediamonkey.com/wiki/SDBIniFile)
 
 ## Requirements
 
@@ -66,8 +68,18 @@ Tips:
 | `seek` | Sets `SDBPlayer.PlaybackTime` (milliseconds). |
 | `list_now_playing` | Reads the `CurrentSongList` queue (first N entries). |
 | `run_javascript` | Invokes `SDBApplication.runJSCode` per the MediaMonkey wiki for advanced automations. |
+| `invoke_menu_item` | Walks an `SDB.UI` menu/toolbar scope and executes the resolved `SDBMenuItem`. |
+| `set_config_value` | Writes MediaMonkey.ini entries through `SDB.IniFile` (string, int, or bool). |
 
 All tool results are serialized using Pydantic models defined under `src/mm2024_mcp/models.py`.
+
+### Menu automation
+
+`invoke_menu_item` uses the menu scopes listed in the [ISDBUI::Menu Compendium](https://www.mediamonkey.com/wiki/ISDBUI::Menu_Compendium). Provide the scope name (for example `Menu_Tools`) and a list of captions to traverse beneath that scope (`["Options..."]`). Captions are normalized by removing ampersands and trailing ellipses, and you can loosen matching via `match_strategy="startswith"` or `match_strategy="contains"`. Some menu trees are generated on demand; if a path fails, open the target menu in MediaMonkey once to warm it up before calling the tool again. Passing `allow_disabled=True` is useful for diagnostic scenarios, but be careful—MediaMonkey may still block execution for items that are disabled in the UI.
+
+### Configuration helpers
+
+`set_config_value` wraps `SDB.IniFile` (see the [SDBIniFile reference](https://www.mediamonkey.com/wiki/SDBIniFile)) so you can modify `MediaMonkey.ini` remotely. Pick a `value_type` (`string`, `int`, or `bool`), supply the new value, and optionally choose `persist_mode="flush"` or `persist_mode="apply"` to force MediaMonkey to write or re-load the ini file immediately. The tool returns the prior value whenever possible so you can confirm that a change was accepted. Some settings only take effect after restarting MediaMonkey—consult the MediaMonkey wiki for per-setting caveats.
 
 ## Plugin development workflow
 

@@ -6,9 +6,9 @@ import json
 import logging
 import os
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
-from .models import PlaybackState, TrackInfo
+from .models import ConfigValue, MenuInvocationResult, PlaybackState, TrackInfo
 
 try:  # pragma: no cover - platform-specific import guard
     import pythoncom  # type: ignore
@@ -22,6 +22,9 @@ except Exception:  # pragma: no cover - raised later when actually used
 LOGGER = logging.getLogger(__name__)
 
 _MEDIA_MONKEY_PROG_ID = os.environ.get("MM2024_COM_PROGID", "SongsDB5.SDBApplication")
+
+_MENU_MATCH_STRATEGIES = {"exact", "startswith", "contains"}
+_INI_VALUE_ACCESSORS = {"string": "StringValue", "int": "IntValue", "bool": "BoolValue"}
 
 
 class MediaMonkeyUnavailableError(RuntimeError):
@@ -149,6 +152,108 @@ class MediaMonkeyClient:
                 tracks.append(track)
         return tracks
 
+    def invoke_menu_item(
+        self,
+        scope: str,
+        path: Sequence[str],
+        match_strategy: str = "exact",
+        allow_disabled: bool = False,
+    ) -> MenuInvocationResult:
+        """Resolve and execute a MediaMonkey menu item exposed via ``SDB.UI``."""
+
+        if not path:
+            raise ValueError("Menu path must contain at least one caption segment")
+
+        ui = getattr(self._sdb, "UI", None)
+        if ui is None:
+            raise RuntimeError("MediaMonkey did not expose the SDB.UI automation object")
+
+        if match_strategy not in _MENU_MATCH_STRATEGIES:
+            raise ValueError(f"match_strategy must be one of {_MENU_MATCH_STRATEGIES}")
+
+        try:
+            current = getattr(ui, scope)
+        except AttributeError as exc:  # pragma: no cover - depends on local UI
+            raise ValueError(f"Unknown menu scope '{scope}'") from exc
+
+        matched_path: List[Optional[str]] = []
+        for segment in path:
+            target = _resolve_menu_child(current, segment, match_strategy)
+            if target is None:
+                raise RuntimeError(
+                    f"Unable to resolve menu segment '{segment}' under scope '{scope}'."
+                )
+            matched_path.append(_safe_str(target, "Caption"))
+            current = target
+
+        enabled = bool(getattr(current, "Enabled", True))
+        if not enabled and not allow_disabled:
+            raise RuntimeError(
+                "Resolved menu item is disabled. Pass allow_disabled=True to invoke it anyway."
+            )
+
+        executed = _execute_menu_item(self._sdb, current)
+        if not executed:
+            raise RuntimeError("Unable to invoke the resolved menu item. No callable entrypoint was exposed.")
+
+        return MenuInvocationResult(
+            scope=scope,
+            requested_path=list(path),
+            matched_path=matched_path,
+            caption=_safe_str(current, "Caption"),
+            enabled=enabled,
+            executed=executed,
+        )
+
+    def set_config_value(
+        self,
+        section: str,
+        key: str,
+        value: Any,
+        value_type: str = "string",
+        persist_mode: str = "none",
+    ) -> ConfigValue:
+        """Write a MediaMonkey ``MediaMonkey.ini`` entry via ``SDB.IniFile``."""
+
+        section = section.strip()
+        key = key.strip()
+        if not section or not key:
+            raise ValueError("Both section and key must be provided when mutating configuration")
+
+        ini = getattr(self._sdb, "IniFile", None)
+        if ini is None:
+            raise RuntimeError("MediaMonkey did not expose the IniFile automation surface")
+
+        normalized_type = value_type.lower()
+        if normalized_type not in _INI_VALUE_ACCESSORS:
+            raise ValueError(f"Unsupported value_type '{value_type}'. Choose from {_INI_VALUE_ACCESSORS.keys()}.")
+
+        accessor_name = _INI_VALUE_ACCESSORS[normalized_type]
+        accessor = getattr(ini, accessor_name, None)
+        if accessor is None:
+            raise RuntimeError(f"IniFile does not expose accessor '{accessor_name}' on this MediaMonkey build")
+
+        try:
+            previous = accessor(section, key)
+        except Exception:
+            previous = None
+
+        coerced_previous = _coerce_ini_result(previous, normalized_type)
+        coerced_value = _coerce_ini_input(value, normalized_type)
+
+        _write_ini_value(ini, accessor_name, section, key, coerced_value)
+
+        applied = _persist_ini_changes(ini, persist_mode)
+
+        return ConfigValue(
+            section=section,
+            key=key,
+            value_type=normalized_type,
+            value=coerced_value,
+            previous_value=coerced_previous,
+            applied=applied,
+        )
+
     def run_js(self, code: str, expect_callback: bool = True) -> str:
         """Execute MediaMonkey's ``SDBApplication.runJSCode`` helper."""
 
@@ -258,3 +363,172 @@ def _safe_int(obj: Any, attr: str) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _resolve_menu_child(parent: Any, segment: str, match_strategy: str) -> Optional[Any]:
+    direct_lookup = getattr(parent, "ChildByName", None)
+    if callable(direct_lookup):
+        try:
+            candidate = direct_lookup(segment)
+            if candidate is not None:
+                return candidate
+        except Exception:
+            pass
+
+    normalized_target = _normalize_menu_label(segment)
+    for child in _iterate_menu_children(parent):
+        caption = _safe_str(child, "Caption") or ""
+        normalized_caption = _normalize_menu_label(caption)
+        if _caption_matches(normalized_caption, normalized_target, match_strategy):
+            return child
+    return None
+
+
+def _caption_matches(candidate: str, target: str, match_strategy: str) -> bool:
+    if match_strategy == "startswith":
+        return candidate.startswith(target)
+    if match_strategy == "contains":
+        return target in candidate
+    return candidate == target
+
+
+def _execute_menu_item(application: Any, menu_item: Any) -> bool:
+    for attr in ("Execute", "Click"):
+        method = getattr(menu_item, attr, None)
+        if callable(method):
+            try:
+                method()
+                return True
+            except Exception:
+                continue
+
+    process_menu = getattr(application, "ProcessMenuItem", None)
+    if callable(process_menu):
+        try:
+            process_menu(menu_item)
+            return True
+        except Exception:
+            pass
+
+    on_click = getattr(menu_item, "OnClick", None)
+    if callable(on_click):
+        try:
+            on_click()
+            return True
+        except Exception:
+            pass
+
+    return False
+
+
+def _iterate_menu_children(menu: Any) -> Iterable[Any]:
+    collection_attrs = ("SubItems", "MenuItems", "Items", "ChildItems")
+    for attr in collection_attrs:
+        collection = getattr(menu, attr, None)
+        if collection is None:
+            continue
+        count = int(getattr(collection, "Count", 0)) if hasattr(collection, "Count") else 0
+        if count <= 0:
+            continue
+        for index in range(count):
+            child = _get_indexed_item(collection, index)
+            if child is not None:
+                yield child
+        return
+
+    count = int(getattr(menu, "Count", 0)) if hasattr(menu, "Count") else 0
+    for index in range(count):
+        child = _get_indexed_item(menu, index)
+        if child is not None:
+            yield child
+
+
+def _get_indexed_item(container: Any, index: int) -> Optional[Any]:
+    item_accessor = getattr(container, "Item", None)
+    if callable(item_accessor):
+        try:
+            return item_accessor(index)
+        except Exception:
+            pass
+    call = getattr(container, "__call__", None)
+    if callable(call):
+        try:
+            return call(index)
+        except Exception:
+            pass
+    try:
+        return container[index]
+    except Exception:
+        return None
+
+
+def _normalize_menu_label(label: Optional[str]) -> str:
+    if not label:
+        return ""
+    cleaned = label.replace("&", "")
+    if cleaned.endswith("..."):
+        cleaned = cleaned[:-3]
+    return cleaned.strip().lower()
+
+
+def _coerce_ini_input(value: Any, value_type: str) -> Any:
+    if value_type == "bool":
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+    if value_type == "int":
+        return int(value)
+    return str(value)
+
+
+def _coerce_ini_result(value: Any, value_type: str) -> Optional[Any]:
+    if value is None:
+        return None
+    try:
+        if value_type == "bool":
+            if isinstance(value, str):
+                return value.strip().lower() in {"1", "true", "yes", "on"}
+            if isinstance(value, (int, float)):
+                return bool(int(value))
+            return bool(value)
+        if value_type == "int":
+            return int(value)
+        return str(value)
+    except Exception:
+        return None
+
+
+def _write_ini_value(ini: Any, accessor_name: str, section: str, key: str, value: Any) -> None:
+    accessor = getattr(ini, accessor_name)
+    try:
+        accessor(section, key, value)
+        return
+    except TypeError:
+        pass
+    try:
+        accessor(section, key, value, 0)
+        return
+    except Exception as exc:  # pragma: no cover - depends on COM binding
+        raise RuntimeError(f"Failed to update INI entry [{section}] {key}") from exc
+
+
+def _persist_ini_changes(ini: Any, mode: str) -> bool:
+    normalized = (mode or "none").lower()
+    if normalized == "apply":
+        if _call_ini_method(ini, "Apply"):
+            return True
+        return _call_ini_method(ini, "Flush")
+    if normalized == "flush":
+        return _call_ini_method(ini, "Flush")
+    return False
+
+
+def _call_ini_method(ini: Any, method_name: str) -> bool:
+    method = getattr(ini, method_name, None)
+    if not callable(method):
+        return False
+    try:
+        method()
+        return True
+    except Exception:
+        return False

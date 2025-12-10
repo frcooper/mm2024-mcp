@@ -15,6 +15,33 @@ LOGGER = logging.getLogger(__name__)
 mcp = FastMCP("mm2024-mcp")
 _client: MediaMonkeyClient | None = None
 
+MenuScope = Literal[
+    "Menu_File",
+    "Menu_Edit",
+    "Menu_View",
+    "Menu_Play",
+    "Menu_Tools",
+    "Menu_Help",
+    "Menu_Scripts",
+    "Menu_Export",
+    "Menu_Pop_NP",
+    "Menu_Pop_NP_MainWindow",
+    "Menu_Pop_NP_SendTo",
+    "Menu_Pop_TrackList",
+    "Menu_Pop_TrackList_SendTo",
+    "Menu_Pop_Tree",
+    "Menu_Pop_Tree_SendTo",
+    "Menu_TbStandard",
+    "Menu_TbAdvanced",
+    "Menu_TbCategorize",
+    "Menu_TbEdit",
+    "Menu_TbNavigation",
+    "Menu_TbNPEdit",
+    "Menu_TbNPList",
+    "Menu_TbNPMain",
+    "Menu_TbSearch",
+]
+
 
 def _get_client() -> MediaMonkeyClient:
     global _client
@@ -92,6 +119,50 @@ async def run_javascript(code: str, expect_callback: bool = True) -> str:
         return _get_client().run_js(code, expect_callback=expect_callback)
     except MediaMonkeyUnavailableError as exc:
         raise RuntimeError(str(exc)) from exc
+
+
+@mcp.tool()
+async def invoke_menu_item(
+    scope: MenuScope,
+    path: Annotated[list[str], Field(min_length=1, max_length=8)],
+    match_strategy: Literal["exact", "startswith", "contains"] = "exact",
+    allow_disabled: bool = False,
+) -> dict:
+    """Trigger a MediaMonkey menu item using ``SDB.UI`` menus and toolbars."""
+
+    try:
+        result = _get_client().invoke_menu_item(
+            scope=scope,
+            path=path,
+            match_strategy=match_strategy,
+            allow_disabled=allow_disabled,
+        )
+    except MediaMonkeyUnavailableError as exc:
+        raise RuntimeError(str(exc)) from exc
+    return result.model_dump()
+
+
+@mcp.tool()
+async def set_config_value(
+    section: Annotated[str, Field(min_length=1)],
+    key: Annotated[str, Field(min_length=1)],
+    value: str | int | bool,
+    value_type: Literal["string", "int", "bool"] = "string",
+    persist_mode: Literal["none", "flush", "apply"] = "none",
+) -> dict:
+    """Mutation helper around ``SDB.IniFile`` for MediaMonkey configuration entries."""
+
+    try:
+        result = _get_client().set_config_value(
+            section=section,
+            key=key,
+            value=value,
+            value_type=value_type,
+            persist_mode=persist_mode,
+        )
+    except MediaMonkeyUnavailableError as exc:
+        raise RuntimeError(str(exc)) from exc
+    return result.model_dump()
 
 
 def main() -> None:
