@@ -22,6 +22,7 @@
 - Install dependencies with `uv venv && uv pip install -e .` (or `python -m venv` + `pip install -e .`).
 - Run the server via `uv run mm2024-mcp` or `python -m mm2024_mcp.server`. Configure MCP hosts (Claude Desktop, VS Code MCP client, etc.) to launch the same command.
 - MediaMonkey must be installed on the same Windows machine. The server auto-launches it; if COM activation fails, surface actionable errors instead of silent failures.
+- VS Code + GitHub Copilot can start this server using the workspace `.vscode/mcp.json` file. Use the MCP: Open Workspace Folder Configuration command to review/edit the entry and enable the `mm2024` tools from the Chat tool picker (see [docs](https://code.visualstudio.com/docs/copilot/customization/mcp-servers)).
 
 ## Collaboration Notes
 - Be cautious with disruptive actions (volume jumps, queue clears). Mention them in PR summaries and consider confirmation flags in tool schemas.
