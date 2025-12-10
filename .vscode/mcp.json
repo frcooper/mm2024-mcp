@@ -1,0 +1,21 @@
+{
+  "servers": {
+    "mm2024": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "--directory",
+        "${workspaceFolder}",
+        "run",
+        "mm2024-mcp"
+      ],
+      "env": {
+        "MM2024_COM_PROGID": "SongsDB5.SDBApplication"
+      },
+      "dev": {
+        "watch": "src/mm2024_mcp/**/*.py"
+      }
+    }
+  },
+  "inputs": []
+}
