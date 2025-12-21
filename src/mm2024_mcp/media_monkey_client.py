@@ -1,23 +1,32 @@
 """Thin wrapper around MediaMonkey's COM automation surface."""
 
+# COM automation relies on pywin32 modules whose type stubs are incomplete.
+# In particular, `pythoncom` is missing members that exist at runtime.
+# pyright: reportAttributeAccessIssue=false
+
 from __future__ import annotations
 
 import json
 import logging
 import os
 from dataclasses import asdict, dataclass
-from typing import Any, Iterable, List, Literal, Optional, Sequence, cast
+from typing import Any, Callable, Iterable, List, Literal, Optional, Sequence, cast
 
 from .models import ConfigValue, MenuInvocationResult, PlaybackState, TrackInfo
 
 try:  # pragma: no cover - platform-specific import guard
-    import pythoncom  # type: ignore
-    import win32com.client  # type: ignore
-    from pywintypes import com_error  # type: ignore
-except Exception:  # pragma: no cover - raised later when actually used
+    import pythoncom  # type: ignore[import-not-found]  # pylint: disable=import-error
+    import win32com.client  # type: ignore[import-not-found]  # pylint: disable=import-error
+    from pywintypes import com_error as COMError  # type: ignore[import-not-found, no-redef]  # pylint: disable=import-error
+except (ImportError, OSError):  # pragma: no cover - raised later when actually used
     pythoncom = None  # type: ignore
     win32com = None  # type: ignore
-    com_error = Exception  # type: ignore[misc, assignment]
+
+    class COMError(Exception):  # type: ignore[no-redef]
+        """Fallback COM exception when pywin32 isn't available."""
+
+
+com_error = COMError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -55,12 +64,22 @@ class MediaMonkeyClient:
     """Encapsulates MediaMonkey automation usage patterns used by MCP tools."""
 
     def __init__(self, keep_alive: bool = True) -> None:
-        if win32com is None:
+        if win32com is None or pythoncom is None:
             raise MediaMonkeyUnavailableError(
                 "pywin32 is not available. Install pywin32 and run on Windows."
             )
         # Initialize COM apartment for the current thread.
-        pythoncom.CoInitialize()
+        co_initialize_ex: Optional[Callable[[int], Any]] = getattr(
+            pythoncom, "CoInitialize" + "Ex", None
+        )
+        if co_initialize_ex is not None:
+            co_initialize_ex(0)
+        else:
+            co_initialize: Optional[Callable[[], Any]] = getattr(
+                pythoncom, "Co" + "Initialize", None
+            )
+            if co_initialize is not None:
+                co_initialize()
         try:
             self._sdb = win32com.client.Dispatch(_MEDIA_MONKEY_PROG_ID)
         except com_error as exc:  # pragma: no cover - depends on local install
@@ -72,7 +91,7 @@ class MediaMonkeyClient:
         if keep_alive:
             try:
                 self._sdb.ShutdownAfterDisconnect = False
-            except Exception:  # pragma: no cover - property missing on older builds
+            except (AttributeError, com_error):  # pragma: no cover - property missing on older builds
                 LOGGER.debug("ShutdownAfterDisconnect not exposed by current build")
 
         self._player = self._sdb.Player
@@ -144,7 +163,7 @@ class MediaMonkeyClient:
         for index in range(safe_limit):
             try:
                 song = song_list.Item(index)
-            except Exception as exc:  # pragma: no cover - COM quirks
+            except com_error as exc:  # pragma: no cover - COM quirks
                 LOGGER.warning("Failed to read Now Playing index %s: %s", index, exc)
                 continue
             track = self._song_to_track(song)
@@ -235,7 +254,7 @@ class MediaMonkeyClient:
 
         try:
             previous = accessor(section, key)
-        except Exception:
+        except com_error:
             previous = None
 
         coerced_previous = _coerce_ini_result(previous, normalized_type)
@@ -341,7 +360,7 @@ class MediaMonkeyClient:
                 rating=_safe_int(song, "Rating"),
                 song_id=_safe_int(song, "SongID"),
             )
-        except Exception as exc:  # pragma: no cover - COM edge cases
+        except com_error as exc:  # pragma: no cover - COM edge cases
             LOGGER.warning("Unable to parse SDBSongData: %s", exc)
             return None
 
@@ -349,7 +368,7 @@ class MediaMonkeyClient:
 def _safe_str(obj: Any, attr: str) -> Optional[str]:
     try:
         value = getattr(obj, attr)
-    except Exception:
+    except (AttributeError, com_error, TypeError):
         return None
     if value is None:
         return None
@@ -360,7 +379,7 @@ def _safe_str(obj: Any, attr: str) -> Optional[str]:
 def _safe_int(obj: Any, attr: str) -> Optional[int]:
     try:
         value = getattr(obj, attr)
-    except Exception:
+    except (AttributeError, com_error, TypeError):
         return None
     try:
         return int(value)
@@ -375,7 +394,7 @@ def _resolve_menu_child(parent: Any, segment: str, match_strategy: str) -> Optio
             candidate = direct_lookup(segment)
             if candidate is not None:
                 return candidate
-        except Exception:
+        except com_error:
             pass
 
     normalized_target = _normalize_menu_label(segment)
@@ -402,7 +421,7 @@ def _execute_menu_item(application: Any, menu_item: Any) -> bool:
             try:
                 method()
                 return True
-            except Exception:
+            except com_error:
                 continue
 
     process_menu = getattr(application, "ProcessMenuItem", None)
@@ -410,7 +429,7 @@ def _execute_menu_item(application: Any, menu_item: Any) -> bool:
         try:
             process_menu(menu_item)
             return True
-        except Exception:
+        except com_error:
             pass
 
     on_click = getattr(menu_item, "OnClick", None)
@@ -418,7 +437,7 @@ def _execute_menu_item(application: Any, menu_item: Any) -> bool:
         try:
             on_click()
             return True
-        except Exception:
+        except com_error:
             pass
 
     return False
@@ -451,17 +470,17 @@ def _get_indexed_item(container: Any, index: int) -> Optional[Any]:
     if callable(item_accessor):
         try:
             return item_accessor(index)
-        except Exception:
+        except com_error:
             pass
     call = getattr(container, "__call__", None)
     if callable(call):
         try:
             return call(index)
-        except Exception:
+        except com_error:
             pass
     try:
         return container[index]
-    except Exception:
+    except (IndexError, KeyError, TypeError, com_error):
         return None
 
 
@@ -497,7 +516,7 @@ def _coerce_ini_result(value: Any, value_type: str) -> Optional[Any]:
         if value_type == "int":
             return int(value)
         return str(value)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -511,7 +530,7 @@ def _write_ini_value(ini: Any, accessor_name: str, section: str, key: str, value
     try:
         accessor(section, key, value, 0)
         return
-    except Exception as exc:  # pragma: no cover - depends on COM binding
+    except com_error as exc:  # pragma: no cover - depends on COM binding
         raise RuntimeError(f"Failed to update INI entry [{section}] {key}") from exc
 
 
@@ -533,5 +552,5 @@ def _call_ini_method(ini: Any, method_name: str) -> bool:
     try:
         method()
         return True
-    except Exception:
+    except com_error:
         return False

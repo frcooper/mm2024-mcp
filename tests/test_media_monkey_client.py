@@ -1,3 +1,7 @@
+"""Unit tests for internal MediaMonkey helper functions."""
+
+# pylint: disable=protected-access
+
 import types
 
 import mm2024_mcp.media_monkey_client as mmc

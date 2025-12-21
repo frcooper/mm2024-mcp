@@ -1,0 +1,14 @@
+{
+  "pythonVersion": "3.11",
+  "include": ["src"],
+  "exclude": [
+    "**/__pycache__",
+    "**/.mypy_cache",
+    "**/.pytest_cache",
+    "**/.ruff_cache",
+    "**/.venv",
+    "**/*.egg-info",
+    "build",
+    "dist"
+  ]
+}
