@@ -6,7 +6,7 @@ import json
 import logging
 import os
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Iterable, List, Literal, Optional, Sequence, cast
 
 from .models import ConfigValue, MenuInvocationResult, PlaybackState, TrackInfo
 
@@ -245,16 +245,17 @@ class MediaMonkeyClient:
 
         applied = _persist_ini_changes(ini, persist_mode)
 
+        value_type_literal = cast(Literal["string", "int", "bool"], normalized_type)
         return ConfigValue(
             section=section,
             key=key,
-            value_type=normalized_type,
+            value_type=value_type_literal,
             value=coerced_value,
             previous_value=coerced_previous,
             applied=applied,
         )
 
-    def run_js(self, code: str, expect_callback: bool = True) -> str:
+    def run_js(self, code: str, expect_callback: bool = True):
         """Execute MediaMonkey's ``SDBApplication.runJSCode`` helper."""
 
         if not code.strip():
@@ -293,7 +294,7 @@ class MediaMonkeyClient:
         if not parsed.get("ok", False):
             raise RuntimeError(parsed.get("error", "Unknown MediaMonkey JS error"))
         data = parsed.get("data")
-        return json.dumps(data)
+        return data
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -305,6 +306,8 @@ class MediaMonkeyClient:
 
         now_playing = getattr(player, "CurrentSongList", None)
         now_playing_size = int(getattr(now_playing, "Count", 0)) if now_playing else None
+        current_index_raw = int(getattr(player, "CurrentSongIndex", -1))
+        current_index = current_index_raw if current_index_raw >= 0 else None
 
         return _RawPlaybackState(
             is_playing=bool(getattr(player, "isPlaying", False)),
@@ -315,7 +318,7 @@ class MediaMonkeyClient:
             volume=int(getattr(player, "Volume", 0)),
             playback_time_ms=int(getattr(player, "PlaybackTime", 0)),
             track_length_ms=int(getattr(song, "SongLength", 0)) if track else None,
-            current_index=int(getattr(player, "CurrentSongIndex", -1)),
+            current_index=current_index,
             now_playing_size=now_playing_size,
             track=track,
         )

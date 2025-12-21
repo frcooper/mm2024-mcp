@@ -17,7 +17,7 @@ The package is published on [PyPI](https://pypi.org/project/mm2024-mcp/), so you
 - Windows host with MediaMonkey 5+/2024 installed.
 - Python 3.11+ (the MCP SDK requires 3.10+, we target 3.11).
 - `pywin32` (installed automatically via `pyproject.toml`).
-- `modelcontextprotocol` Python SDK 1.2.0+.
+- `modelcontextprotocol` Python SDK 1.0.1+.
 
 > **Note:** MediaMonkey automatically launches when the COM `SongsDB5.SDBApplication` object is created. The MCP server keeps `ShutdownAfterDisconnect = False` so MediaMonkey is not force-closed when the server exits.
 
@@ -63,6 +63,8 @@ Visual Studio Code 1.102+ with GitHub Copilot supports MCP servers natively (see
 3. Inspect `.vscode/mcp.json`, update the path if your repository resides somewhere other than `${workspaceFolder}`, and tweak `env` entries (for example, override `MM2024_COM_PROGID`).
 4. Open the Chat view (Ctrl+Alt+I), pick the `mm2024` server in the Tools picker, and approve the trust prompt the first time VS Code launches the server.
 5. While developing MediaMonkey plugins, invoke MCP tools directly from chat (for example, `#get_playback_state`, `#list_now_playing`, or `#run_javascript`) to validate COM behavior without leaving the editor.
+
+The workspace configuration uses `scripts/mm2024-mcp.ps1`, which prefers `uv run mm2024-mcp` but falls back to `python -m mm2024_mcp.server` if `uv` is not on PATH.
 
 Tips:
 

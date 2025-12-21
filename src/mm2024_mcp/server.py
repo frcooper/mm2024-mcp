@@ -112,7 +112,7 @@ async def list_now_playing(limit: Annotated[int, Field(ge=1, le=100)] = 25) -> l
 
 
 @mcp.tool()
-async def run_javascript(code: str, expect_callback: bool = True) -> str:
+async def run_javascript(code: str, expect_callback: bool = True):
     """Invoke MediaMonkey's ``runJSCode`` bridge for advanced automations."""
 
     try:

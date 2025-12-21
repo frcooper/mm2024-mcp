@@ -2,12 +2,13 @@
   "servers": {
     "mm2024": {
       "type": "stdio",
-      "command": "uv",
+      "command": "powershell",
       "args": [
-        "--directory",
-        "${workspaceFolder}",
-        "run",
-        "mm2024-mcp"
+        "-NoProfile",
+        "-File",
+        "${workspaceFolder}/scripts/mm2024-mcp.ps1",
+        "-Workspace",
+        "${workspaceFolder}"
       ],
       "env": {
         "MM2024_COM_PROGID": "SongsDB5.SDBApplication"
